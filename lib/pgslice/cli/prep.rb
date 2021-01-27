@@ -18,7 +18,8 @@ module PgSlice
       if options[:partition]
         abort "Usage: \"pgslice prep TABLE COLUMN PERIOD\"" if !(column && period)
         abort "Column not found: #{column}" unless table.columns.include?(column)
-        abort "Invalid period: #{period}" unless SQL_FORMAT[period.to_sym]
+        # unless SQL_FORMAT[period.to_sym] || number?(period)
+        abort "Invalid period: #{period}" unless number?(period)
       end
 
       queries = []

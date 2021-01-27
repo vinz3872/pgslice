@@ -176,5 +176,9 @@ module PgSlice
     def make_fk_def(fk_def, table)
       "ALTER TABLE #{quote_table(table)} ADD #{fk_def};"
     end
+
+    def number?(string)
+      true if Float(string) rescue false
+    end
   end
 end

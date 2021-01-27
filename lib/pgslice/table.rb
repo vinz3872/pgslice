@@ -90,7 +90,11 @@ module PgSlice
 
     def column_cast(column)
       data_type = execute("SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3", [schema, name, column])[0]["data_type"]
-      data_type == "timestamp with time zone" ? "timestamptz" : "date"
+      unless data_type == 'integer'
+        return data_type == "timestamp with time zone" ? "timestamptz" : "date"
+      end
+
+      data_type
     end
 
     def max_id(primary_key, below: nil, where: nil)
@@ -102,10 +106,19 @@ module PgSlice
       execute(query)[0]["max"].to_i
     end
 
-    def min_id(primary_key, column, cast, starting_time, where)
+    # def min_id(primary_key, column, cast, starting_time, where)
+    #   query = "SELECT MIN(#{quote_ident(primary_key)}) FROM #{quote_table}"
+    #   conditions = []
+    #   conditions << "#{quote_ident(column)} >= #{sql_date(starting_time, cast)}" if starting_time
+    #   conditions << where if where
+    #   query << " WHERE #{conditions.join(" AND ")}" if conditions.any?
+    #   (execute(query)[0]["min"] || 1).to_i
+    # end
+
+    def min_id(primary_key, column, cast, starting_range, where)
       query = "SELECT MIN(#{quote_ident(primary_key)}) FROM #{quote_table}"
       conditions = []
-      conditions << "#{quote_ident(column)} >= #{sql_date(starting_time, cast)}" if starting_time
+      conditions << "#{quote_ident(column)} >= #{starting_range}" if starting_range
       conditions << where if where
       query << " WHERE #{conditions.join(" AND ")}" if conditions.any?
       (execute(query)[0]["min"] || 1).to_i

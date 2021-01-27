@@ -27,12 +27,14 @@ module PgSlice
       period, field, cast, _, declarative, _ = dest_table.fetch_settings(table.trigger_name)
 
       if period
-        name_format = self.name_format(period)
+        # name_format = self.name_format(period)
 
-        partitions = dest_table.partitions
+        partitions = dest_table.partitions.sort_by { |partition| partition.name[/\d+/].to_i }
         if partitions.any?
-          starting_time = partition_date(partitions.first, name_format)
-          ending_time = advance_date(partition_date(partitions.last, name_format), period, 1)
+          starting_range = partitions.first.name.match(/_(\d+)_/)[1]
+          ending_range = partitions.last.name.match(/_(\d+)$/)[1]
+          # starting_time = partition_date(partitions.first, name_format)
+          # ending_time = advance_date(partition_date(partitions.last, name_format), period, 1)
         end
       end
 
@@ -58,7 +60,7 @@ module PgSlice
         end
 
       if max_dest_id == 0 && !options[:swapped]
-        min_source_id = source_table.min_id(primary_key, field, cast, starting_time, options[:where])
+        min_source_id = source_table.min_id(primary_key, field, cast, starting_range, options[:where])
         max_dest_id = min_source_id - 1 if min_source_id
       end
 
@@ -75,8 +77,8 @@ module PgSlice
 
       while starting_id < max_source_id
         where = "#{quote_ident(primary_key)} > #{starting_id} AND #{quote_ident(primary_key)} <= #{starting_id + batch_size}"
-        if starting_time
-          where << " AND #{quote_ident(field)} >= #{sql_date(starting_time, cast)} AND #{quote_ident(field)} < #{sql_date(ending_time, cast)}"
+        if starting_range
+          where << " AND #{quote_ident(field)} >= #{starting_range} AND #{quote_ident(field)} < #{ending_range}"
         end
         if options[:where]
           where << " AND #{options[:where]}"

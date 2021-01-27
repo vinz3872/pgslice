@@ -12,11 +12,6 @@ module PgSlice
 
       assert_table(table)
 
-      future = options[:future]
-      past = options[:past]
-      tablespace = options[:tablespace]
-      range = (-1 * past)..future
-
       period, field, cast, needs_comment, declarative, version = table.fetch_settings(original_table.trigger_name)
       unless period
         message = "No settings found: #{table}"
@@ -24,14 +19,21 @@ module PgSlice
         abort message
       end
 
+      # 1, 101, 201, 301..
+      past = options[:past]
+      # 101, 201, 301..
+      future = options[:future]
+      abort 'wrong past option' unless past % period.to_i == 1
+      abort 'wrong future option' unless future % period.to_i == 1
+
+      tablespace = options[:tablespace]
+      range = (past..future).step(period.to_i).to_a
+
       queries = []
 
       if needs_comment
         queries << "COMMENT ON TRIGGER #{quote_ident(trigger_name)} ON #{quote_table(table)} is 'column:#{field},period:#{period},cast:#{cast}';"
       end
-
-      # today = utc date
-      today = round_date(Time.now.utc.to_date, period)
 
       schema_table =
         if !declarative
@@ -55,21 +57,21 @@ module PgSlice
       tablespace_str = tablespace.empty? ? "" : " TABLESPACE #{quote_ident(tablespace)}"
 
       added_partitions = []
-      range.each do |n|
-        day = advance_date(today, period, n)
+      range.each_cons(2) do |first_range, last_range|
+        # last_range -= 1
 
-        partition = Table.new(original_table.schema, "#{original_table.name}_#{day.strftime(name_format(period))}")
+        partition = Table.new(original_table.schema, "#{original_table.name}_#{first_range}_#{last_range}")
         next if partition.exists?
         added_partitions << partition
 
         if declarative
           queries << <<-SQL
-CREATE TABLE #{quote_table(partition)} PARTITION OF #{quote_table(table)} FOR VALUES FROM (#{sql_date(day, cast, false)}) TO (#{sql_date(advance_date(day, period, 1), cast, false)})#{tablespace_str};
+CREATE TABLE #{quote_table(partition)} PARTITION OF #{quote_table(table)} FOR VALUES FROM (#{first_range}) TO (#{last_range})#{tablespace_str};
           SQL
         else
           queries << <<-SQL
 CREATE TABLE #{quote_table(partition)}
-    (CHECK (#{quote_ident(field)} >= #{sql_date(day, cast)} AND #{quote_ident(field)} < #{sql_date(advance_date(day, period, 1), cast)}))
+    (CHECK (#{quote_ident(field)} >= #{first_range} AND #{quote_ident(field)} < #{last_range}))
     INHERITS (#{quote_table(table)})#{tablespace_str};
           SQL
         end
@@ -85,47 +87,48 @@ CREATE TABLE #{quote_table(partition)}
         end
       end
 
-      unless declarative
-        # update trigger based on existing partitions
-        current_defs = []
-        future_defs = []
-        past_defs = []
-        name_format = self.name_format(period)
-        partitions = (table.partitions + added_partitions).uniq(&:name).sort_by(&:name)
+      abort "doesn't support non declarative" unless declarative
+#       unless declarative
+#         # update trigger based on existing partitions
+#         current_defs = []
+#         future_defs = []
+#         past_defs = []
+#         name_format = self.name_format(period)
+#         partitions = (table.partitions + added_partitions).uniq(&:name).sort_by(&:name)
 
-        partitions.each do |partition|
-          day = partition_date(partition, name_format)
+#         partitions.each do |partition|
+#           day = partition_date(partition, name_format)
 
-          sql = "(NEW.#{quote_ident(field)} >= #{sql_date(day, cast)} AND NEW.#{quote_ident(field)} < #{sql_date(advance_date(day, period, 1), cast)}) THEN
-              INSERT INTO #{quote_table(partition)} VALUES (NEW.*);"
+#           sql = "(NEW.#{quote_ident(field)} >= #{sql_date(day, cast)} AND NEW.#{quote_ident(field)} < #{sql_date(advance_date(day, period, 1), cast)}) THEN
+#               INSERT INTO #{quote_table(partition)} VALUES (NEW.*);"
 
-          if day.to_date < today
-            past_defs << sql
-          elsif advance_date(day, period, 1) < today
-            current_defs << sql
-          else
-            future_defs << sql
-          end
-        end
+#           if day.to_date < today
+#             past_defs << sql
+#           elsif advance_date(day, period, 1) < today
+#             current_defs << sql
+#           else
+#             future_defs << sql
+#           end
+#         end
 
-        # order by current period, future periods asc, past periods desc
-        trigger_defs = current_defs + future_defs + past_defs.reverse
+#         # order by current period, future periods asc, past periods desc
+#         trigger_defs = current_defs + future_defs + past_defs.reverse
 
-        if trigger_defs.any?
-          queries << <<-SQL
-CREATE OR REPLACE FUNCTION #{quote_ident(trigger_name)}()
-    RETURNS trigger AS $$
-    BEGIN
-        IF #{trigger_defs.join("\n        ELSIF ")}
-        ELSE
-            RAISE EXCEPTION 'Date out of range. Ensure partitions are created.';
-        END IF;
-        RETURN NULL;
-    END;
-    $$ LANGUAGE plpgsql;
-          SQL
-        end
-      end
+#         if trigger_defs.any?
+#           queries << <<-SQL
+# CREATE OR REPLACE FUNCTION #{quote_ident(trigger_name)}()
+#     RETURNS trigger AS $$
+#     BEGIN
+#         IF #{trigger_defs.join("\n        ELSIF ")}
+#         ELSE
+#             RAISE EXCEPTION 'Date out of range. Ensure partitions are created.';
+#         END IF;
+#         RETURN NULL;
+#     END;
+#     $$ LANGUAGE plpgsql;
+#           SQL
+#         end
+#       end
 
       run_queries(queries) if queries.any?
     end
